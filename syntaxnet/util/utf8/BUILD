@@ -17,6 +17,9 @@ cc_library(
     deps = [
         "//syntaxnet:base",
         "//third_party/utf",
+        "@org_tensorflow//tensorflow/core:framework_headers_lib",
+        "@org_tensorflow//tensorflow/core:framework",
+        "@org_tensorflow//tensorflow/core:lib",
     ],
 )
 
@@ -27,7 +30,7 @@ cc_test(
         "unicodetext_unittest.cc",
     ],
     deps = [
-        "@tf//tensorflow/core:testlib",
+        "@org_tensorflow//tensorflow/core:testlib",
         ":unicodetext",
     ],
 )

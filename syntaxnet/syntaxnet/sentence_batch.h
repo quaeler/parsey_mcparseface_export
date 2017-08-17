@@ -13,11 +13,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef $TARGETDIR_SENTENCE_BATCH_H_
-#define $TARGETDIR_SENTENCE_BATCH_H_
+#ifndef SYNTAXNET_SENTENCE_BATCH_H_
+#define SYNTAXNET_SENTENCE_BATCH_H_
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "syntaxnet/embedding_feature_extractor.h"
@@ -25,9 +26,7 @@ limitations under the License.
 #include "syntaxnet/parser_state.h"
 #include "syntaxnet/parser_transitions.h"
 #include "syntaxnet/sentence.pb.h"
-#include "syntaxnet/sparse.pb.h"
 #include "syntaxnet/task_context.h"
-#include "syntaxnet/task_spec.pb.h"
 #include "syntaxnet/term_frequency_map.h"
 
 namespace syntaxnet {
@@ -36,10 +35,15 @@ namespace syntaxnet {
 // by reading in multiple sentences in parallel.
 class SentenceBatch {
  public:
-  SentenceBatch(int batch_size, string input_name)
+   SentenceBatch(int batch_size, string input_name)
+       : SentenceBatch(batch_size, input_name, false) {}
+
+   SentenceBatch(int batch_size, string input_name, bool use_sentence_feed)
       : batch_size_(batch_size),
-        input_name_(input_name),
-        sentences_(batch_size) {}
+        input_name_(std::move(input_name)),
+        sentences_(batch_size),
+        use_sentence_feed_(use_sentence_feed),
+        sentence_feed_index_(0) {}
 
   // Initializes all resources and opens the corpus file.
   void Init(TaskContext *context);
@@ -50,11 +54,16 @@ class SentenceBatch {
   bool AdvanceSentence(int index);
 
   // Rewinds the corpus reader.
-  void Rewind() { reader_->Reset(); }
+  void Rewind() {
+    if (reader_ != nullptr) reader_->Reset();
+    sentence_feed_index_ = 0;
+  }
 
   int size() const { return size_; }
 
   Sentence *sentence(int index) { return sentences_[index].get(); }
+
+  void FeedSentences(std::vector<std::unique_ptr<Sentence>> &sentences);
 
  private:
   // Running tally of non-nullptr states in the batch.
@@ -71,8 +80,16 @@ class SentenceBatch {
 
   // Batch: Sentence objects.
   std::vector<std::unique_ptr<Sentence>> sentences_;
+
+  // Sentence objects fed in, superceding the reader_ while non-empty
+  std::vector<std::unique_ptr<Sentence>> feed_sentences_;
+
+  bool use_sentence_feed_;
+
+  int sentence_feed_index_;
+
 };
 
 }  // namespace syntaxnet
 
-#endif  // $TARGETDIR_SENTENCE_BATCH_H_
+#endif  // SYNTAXNET_SENTENCE_BATCH_H_

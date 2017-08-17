@@ -24,9 +24,9 @@ from tensorflow.python.ops import tensor_array_ops
 from syntaxnet import graph_builder
 from syntaxnet.ops import gen_parser_ops
 
-tf.NoGradient('BeamParseReader')
-tf.NoGradient('BeamParser')
-tf.NoGradient('BeamParserOutput')
+tf.NotDifferentiable('BeamParseReader')
+tf.NotDifferentiable('BeamParser')
+tf.NotDifferentiable('BeamParserOutput')
 
 
 def AddCrossEntropy(batch_size, n):
@@ -36,7 +36,8 @@ def AddCrossEntropy(batch_size, n):
     return tf.constant(0, dtype=tf.float32, shape=[1])
 
   for beam_id in range(batch_size):
-    beam_gold_slot = tf.reshape(tf.slice(n['gold_slot'], [beam_id], [1]), [1])
+    beam_gold_slot = tf.reshape(
+        tf.strided_slice(n['gold_slot'], [beam_id], [beam_id + 1]), [1])
     def _ComputeCrossEntropy():
       """Adds ops to compute cross entropy of the gold path in a beam."""
       # Requires a cast so that UnsortedSegmentSum, in the gradient,
@@ -48,8 +49,9 @@ def AddCrossEntropy(batch_size, n):
       beam_scores = tf.reshape(tf.gather(n['all_path_scores'], idx), [1, -1])
       num = tf.shape(idx)
       return tf.nn.softmax_cross_entropy_with_logits(
-          beam_scores, tf.expand_dims(
-              tf.sparse_to_dense(beam_gold_slot, num, [1.], 0.), 0))
+          labels=tf.expand_dims(
+              tf.sparse_to_dense(beam_gold_slot, num, [1.], 0.), 0),
+          logits=beam_scores)
     # The conditional here is needed to deal with the last few batches of the
     # corpus which can contain -1 in beam_gold_slot for empty batch slots.
     cross_entropies.append(cf.cond(
@@ -78,9 +80,16 @@ class StructuredGraphBuilder(graph_builder.GreedyParser):
                      batch_size,
                      corpus_name,
                      until_all_final=False,
-                     always_start_new_sentences=False):
+                     always_start_new_sentences=False,
+		     document_source=None):
     """Adds an op capable of reading sentences and parsing them with a beam."""
+    documents_from_input=True
+    if document_source is None:
+      empty_documents_list = tf.constant([], tf.string)
+      document_source = tf.placeholder_with_default(empty_documents_list, [None], "documents_in_placeholder")
+      documents_from_input=False
     features, state, epochs = gen_parser_ops.beam_parse_reader(
+        documents=document_source,
         task_context=task_context,
         feature_size=self._feature_size,
         beam_size=self._beam_size,
@@ -89,8 +98,9 @@ class StructuredGraphBuilder(graph_builder.GreedyParser):
         allow_feature_weights=self._allow_feature_weights,
         arg_prefix=self._arg_prefix,
         continue_until_all_final=until_all_final,
-        always_start_new_sentences=always_start_new_sentences)
-    return {'state': state, 'features': features, 'epochs': epochs}
+        always_start_new_sentences=always_start_new_sentences,
+	documents_from_input=documents_from_input)
+    return {'state': state, 'features': features, 'epochs': epochs }
 
   def _BuildSequence(self,
                      batch_size,
@@ -122,6 +132,7 @@ class StructuredGraphBuilder(graph_builder.GreedyParser):
         KeepGoing,
         Advance,
         [state, step, scores_array, alive, alive_steps] + list(features),
+        shape_invariants=[tf.TensorShape(None)] * (len(features) + 5),
         parallel_iterations=100)
 
     # Link to the final nodes/values of ops that have passed through While:
@@ -141,7 +152,7 @@ class StructuredGraphBuilder(graph_builder.GreedyParser):
       n = self.training
       n['accumulated_alive_steps'] = self._AddVariable(
           [batch_size], tf.int32, 'accumulated_alive_steps',
-          tf.zeros_initializer)
+          tf.zeros_initializer())
       n.update(self._AddBeamReader(task_context, batch_size, corpus_name))
       # This adds a required 'step' node too:
       learning_rate = tf.constant(learning_rate, dtype=tf.float32)
@@ -197,7 +208,7 @@ class StructuredGraphBuilder(graph_builder.GreedyParser):
       for param in trainable_params.values():
         slot = optimizer.get_slot(param, 'momentum')
         self.inits[slot.name] = state_ops.init_variable(slot,
-                                                        tf.zeros_initializer)
+                                                        tf.zeros_initializer())
         self.variables[slot.name] = slot
 
       def NumericalChecks():
@@ -222,14 +233,16 @@ class StructuredGraphBuilder(graph_builder.GreedyParser):
                     task_context,
                     batch_size,
                     evaluation_max_steps=300,
-                    corpus_name=None):
+                    corpus_name=None,
+		    document_source=None):
     with tf.name_scope('evaluation'):
       n = self.evaluation
       n.update(self._AddBeamReader(task_context,
                                    batch_size,
                                    corpus_name,
                                    until_all_final=True,
-                                   always_start_new_sentences=True))
+                                   always_start_new_sentences=True,
+				   document_source=document_source))
       self._BuildNetwork(
           list(n['features']),
           return_average=self._use_averaging)
